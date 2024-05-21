@@ -1,0 +1,195 @@
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+#Creating a VPC called-cloud-vpc in aws-region-1a North Virginia 
+
+#Creating 4 Subets  2 Public and two private named public-cloud-subnet1 , public-cloud-subnet2 , private-cloud-subnet1 and private-cloud-subnet2
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: 192.168.0.0/16
+      Tags:
+       - Key: Name
+         Value: Cloud-VPC 
+  
+#Creating an Internet Gateway called  cloud-IGW and 
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: cloud-IGW
+
+#Attaching the IGW to VPC
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+#Creating 4 subnets 
+  cloudpublicsubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 192.168.0.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: us-east-1a
+      Tags:
+       - Key: Name
+         Value: Cloud Public subnet1
+      
+
+  cloudpublicsubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 192.168.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: us-east-1b
+      Tags:
+       - Key: Name
+         Value: Cloud Public Subnet2
+
+  cloudprivatesubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 192.168.2.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: us-east-1a
+      Tags:
+       - Key: Name
+         Value: Cloud Private Subnet1
+
+  cloudprivatesubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 192.168.3.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: us-east-1b
+      Tags:
+       - Key: Name
+         Value: Cloud Private Subnet2
+
+#Creating a NAT Gateway
+  NATGatewayEIP:
+   Type: AWS::EC2::EIP
+   Properties:
+      Domain: vpc
+  Natgateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref cloudpublicsubnet1
+      Tags:
+        - Key: Name
+          Value: cloud-nat-gateway
+
+#Creating Cloud Public Route table
+  cloudPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+       - Key: Name
+         Value: Cloud Public Route Table
+
+#Creating Cloud Private Route table
+  cloudPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+       - Key: Name
+         Value: Cloud Private Route Table
+
+#Asscoiating Subnets with their respective RouteTable 
+
+  cloudpublicsubnet1association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref cloudpublicsubnet1
+      RouteTableId: !Ref cloudPublicRouteTable
+
+  cloudpublicsubnet2association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref cloudpublicsubnet2
+      RouteTableId: !Ref cloudPublicRouteTable
+
+  cloudprivateubnet1association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref cloudprivatesubnet1
+      RouteTableId: !Ref cloudPrivateRouteTable
+
+  cloudprivatesubnet2association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref cloudprivatesubnet2
+      RouteTableId: !Ref cloudPrivateRouteTable    
+
+#Asscoiating Public Route
+  cloudpublicroute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref cloudPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+#Asccoating Private Routes
+
+  cloudprivateroute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref cloudPrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref Natgateway
+  
+
+
+######################
+# Outputs section
+######################
+
+Outputs:
+  VPC:
+    Description: Gbnerating a VPC ID and creating a VPC 
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VPCID'
+  cloudpublicsubnet1:
+    Description: Exporting subnet Id of Cloud-Public-Subnet1
+    Value: !Ref  cloudpublicsubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-cloudpublicsubnet1'
+  cloudpublicsubnet2:
+    Description: Exporting subnet Id of Cloud-Public-Subnet1
+    Value: !Ref  cloudpublicsubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-cloudpublicsubnet2'
+  cloudprivatesubnet2:
+    Description: Exporting subnet Id of Cloud-Private-Subnet1
+    Value: !Ref  cloudprivatesubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-cloudprivatesubnet1'
+  cloudprivatesubnet3:
+    Description: Exporting subnet Id of Cloud-Private-Subnet2
+    Value: !Ref  cloudprivatesubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-cloudprivatesubnet2'
+  cloudPublicRouteTable:
+    Description: Exporting Route Table ID  of CloudPublicRouteTable
+    Value: !Ref  cloudPublicRouteTable
+    Export:
+      Name: !Sub '${AWS::StackName}-cloudPublicRouteTable'
+  cloudPrivateRouteTable:
+    Description: Exporting Route Table ID  of CloudPrivateRouteTable
+    Value: !Ref  cloudPrivateRouteTable
+    Export:
+      Name: !Sub '${AWS::StackName}-cloudPrivateRouteTable'    
