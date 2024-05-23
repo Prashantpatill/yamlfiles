@@ -1,0 +1,271 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Application Template: Demonstrates how to reference resources from
+  a different stack. This template provisions an EC2 instance in a VPC Subnet
+  provisioned in a different stack.'
+
+# This template creates:
+#   Amazon EC2 instance
+#   Security Group
+
+######################
+# Parameters section
+######################
+
+Parameters:
+
+  NetworkStackName:
+    Description: Name of an active CloudFormation stack that contains the networking
+      resources, such as the VPC and subnet that will be used in this stack.
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: ^[a-zA-Z][-a-zA-Z0-9]*$
+    Default: aws-cloud-network-stack
+
+Resources:
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Grop
+      VpcId: !ImportValue
+        Fn::Sub: ${NetworkStackName}-VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 112.141.230.119/32
+      Tags:
+        - Key: Name
+          Value: Web Server Security Group
+
+  MyEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-04ff98ccbfa41c9ad
+      InstanceType: t2.micro
+      KeyName: !Ref MyKeyPair
+      SecurityGroupIds:
+        - !Ref WebServerSecurityGroup
+      SubnetId: !ImportValue
+        Fn::Sub: ${NetworkStackName}-cloudpublicsubnet2
+      IamInstanceProfile: LabInstanceProfile
+      UserData: !Base64 |
+        #!/bin/bash
+        yum -y update
+        yum -y install php httpd mysql
+        PHP_VERSION=$(php -v | head -n 1 | awk '{print $2}' | awk -F"." '{print $1}')
+        while [ $PHP_VERSION -ne 7 ]; do
+          amazon-linux-extras install php7.4 -y
+          PHP_VERSION=$(php -v | head -n 1 | awk '{print $2}' | awk -F"." '{print $1}')
+        done
+        yum -y install php-mbstring php-xml
+        wget http://wordpress.org/latest.tar.gz -P /tmp/
+        tar zxvf /tmp/latest.tar.gz -C /tmp
+        cp -r /tmp/wordpress/* /var/www/html/
+        chown apache:apache -R /var/www/html
+        systemctl enable httpd.service
+        systemctl start httpd.service
+      Tags:
+        - Key: Name
+          Value: Cloud Formation Instance
+  MyEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref MyEC2Instance
+  MyKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: MyKeyPair
+
+  cloudrdsdbsubnet:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: dbs subnet group for cloud formation rds instance
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: ${NetworkStackName}-cloudprivatesubnet1
+        - !ImportValue
+          Fn::Sub: ${NetworkStackName}-cloudprivatesubnet2
+  cloudrdssecuritygroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS instance
+      VpcId: !ImportValue
+        Fn::Sub: ${NetworkStackName}-VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: Cloud RDS Security Group
+  cloudrdsinstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: cloudrdsinstance
+      Engine: mysql
+      EngineVersion: 8.0.35
+      DBInstanceClass: db.t3.micro
+      MasterUsername: admin
+      MasterUserPassword: adminpassword
+      DBName: cloudfromationdatabase
+      VPCSecurityGroups:
+        - !Ref cloudrdssecuritygroup
+      DBSubnetGroupName: !Ref cloudrdsdbsubnet
+      MultiAZ: true
+      StorageType: gp2
+      AllocatedStorage: 20
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: Cloud Fromation RDS Instance
+  cloudrdsreadreplica:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      SourceDBInstanceIdentifier: !Ref cloudrdsinstance
+      DBInstanceClass: db.t3.micro
+      StorageType: gp2
+      AllocatedStorage: 20
+      VPCSecurityGroups:
+        - !Ref cloudrdssecuritygroup
+  clouds3bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: cloudforms3bucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: alias/aws/s3
+      PublicAccessBlockConfiguration:
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  clouds3bucketBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref clouds3bucket
+      PolicyDocument:
+        Id: RequireEncryptionInTransit
+        Version: '2012-10-17'
+        Statement:
+          - Principal: '*'
+            Action: '*'
+            Effect: Deny
+            Resource:
+              - !GetAtt clouds3bucket.Arn
+              - !Sub ${clouds3bucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  cloudloadbalancersecuritygroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Application Load Balncer
+      VpcId: !ImportValue
+        Fn::Sub: ${NetworkStackName}-VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: Cloud Load Balncer Security Group
+  cloudtargetgroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 15
+      HealthyThresholdCount: 5
+      Name: cloudloadtarget
+      Protocol: HTTP
+      Port: 80
+      Targets:
+        - Id: !Ref MyEC2Instance
+      VpcId: !ImportValue
+        Fn::Sub: ${NetworkStackName}-VPCID
+  cloudalblistener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref cloudtargetgroup
+      LoadBalancerArn: !Ref cloudloadbalancer
+      Port: 80
+      Protocol: HTTP
+  cloudloadbalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets:
+        - !ImportValue
+          Fn::Sub: ${NetworkStackName}-cloudpublicsubnet1
+        - !ImportValue
+          Fn::Sub: ${NetworkStackName}-cloudpublicsubnet2
+      SecurityGroups:
+        - !Ref cloudloadbalancersecuritygroup
+  cloudlaunchsg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Launch template
+      VpcId: !ImportValue
+        Fn::Sub: ${NetworkStackName}-VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref cloudloadbalancersecuritygroup
+      Tags:
+        - Key: Name
+          Value: Launch template Security Group
+  cloudlaunchtemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: cloudlaunchtemplate
+      LaunchTemplateData:
+        DisableApiTermination: true
+        ImageId: ami-020ec6cf477c779c0
+        InstanceType: t2.micro
+        KeyName: MyKeyPair
+        SecurityGroupIds:
+          - !Ref cloudlaunchsg
+  cloudasg:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref cloudlaunchtemplate
+        Version: !GetAtt cloudlaunchtemplate.LatestVersionNumber
+      MaxSize: 3
+      MinSize: 1
+      DesiredCapacity: 1
+      TargetGroupARNs:
+        - !Ref cloudtargetgroup
+      VPCZoneIdentifier:
+        - !ImportValue
+            Fn::Sub: ${NetworkStackName}-cloudprivatesubnet1
+        - !ImportValue
+            Fn::Sub: ${NetworkStackName}-cloudprivatesubnet2
+  asgscaleoutpolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref cloudasg
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 70
+  asgscaleinpolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref cloudasg
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 25
